@@ -1,0 +1,206 @@
+import pandas as pd
+import win32com.client
+import os
+import json
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+
+# Configuration file path
+config_file = 'config.json'
+
+
+# Function to load the configuration
+def load_config():
+    if os.path.exists(config_file):
+        with open(config_file, 'r') as file:
+            return json.load(file)
+    return {}
+
+
+# Function to save the configuration
+def save_config():
+    config = {
+        'template_path': template_path.get(),
+        'csv_file_path': csv_file_path.get(),
+        'output_path': output_path.get(),
+        'save_psd': save_psd_var.get(),
+        'save_jpg': save_jpg_var.get()
+    }
+    with open(config_file, 'w') as file:
+        json.dump(config, file)
+
+
+def read_csv_headers(file_path):
+    df = pd.read_csv(file_path, nrows=0)
+    headers = list(df.columns)
+    return headers
+
+
+def update_text_layer(doc, layer_name, text, x, y, font_size):
+    try:
+        textLayer = doc.ArtLayers[layer_name]
+        if textLayer.Kind == 2:  # 2 corresponds to the text layer
+            textItem = textLayer.TextItem
+            textItem.Contents = text
+            textItem.Position = (x, y)
+            textItem.Size = font_size
+    except Exception as e:
+        print(f"Error updating layer {layer_name}: {e}")
+
+
+def generate_images(template_path, csv_file_path, output_path, save_psd, save_jpg, layer_settings, progress_bar,
+                    progress_label):
+    data = pd.read_csv(csv_file_path, delimiter=',')
+    psApp = win32com.client.Dispatch("Photoshop.Application")
+    psApp.Visible = True
+
+    os.makedirs(output_path, exist_ok=True)
+    print(data)
+    total_images = len(data)
+    progress_bar["maximum"] = total_images
+
+    for index, row in data.iterrows():
+        doc = psApp.Open(template_path)
+
+        for layer_name, settings in layer_settings.items():
+            text = row[layer_name]
+            x = settings['x']
+            y = settings['y']
+            font_size = settings['font_size']
+            update_text_layer(doc, layer_name, text, x, y, font_size)
+
+        month = row['luna']
+        city = row['oras']
+
+        month_directory = os.path.join(output_path, month)
+        os.makedirs(month_directory, exist_ok=True)
+
+        if save_psd:
+            output_path_psd = os.path.join(month_directory, f"{city}_image_{index + 1}.psd")
+            doc.SaveAs(output_path_psd)
+
+        if save_jpg:
+            output_path_jpg = os.path.join(month_directory, f"{city}_image_{index + 1}.jpg")
+            jpg_options = win32com.client.Dispatch("Photoshop.ExportOptionsSaveForWeb")
+            jpg_options.Format = 6
+            jpg_options.Quality = 100
+            doc.Export(ExportIn=output_path_jpg, ExportAs=2, Options=jpg_options)
+
+        doc.Close(2)
+
+        progress_bar["value"] = index + 1
+        progress_label["text"] = f"Progress: {index + 1}/{total_images} images processed"
+        root.update_idletasks()
+
+    print("Images generated successfully.")
+    messagebox.showinfo("Success", "Images generated successfully.")
+
+
+def browse_template():
+    template_path.set(filedialog.askopenfilename(filetypes=[("PSD files", "*.psd")]))
+    save_config()
+
+
+def browse_csv():
+    csv_file_path.set(filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")]))
+    save_config()
+    update_layer_settings()
+
+
+def browse_output():
+    output_path.set(filedialog.askdirectory())
+    save_config()
+
+
+def update_layer_settings():
+    file_path = csv_file_path.get()
+    if not file_path:
+        return
+    headers = read_csv_headers(file_path)
+
+    for widget in layer_settings_frame.winfo_children():
+        widget.destroy()
+
+    row = 0
+    for header in headers:
+        ttk.Label(layer_settings_frame, text=f"Layer: {header}").grid(row=row, column=0, padx=5, pady=5)
+        ttk.Label(layer_settings_frame, text="X:").grid(row=row, column=1, padx=5, pady=5)
+        x_entry = ttk.Entry(layer_settings_frame, width=5)
+        x_entry.grid(row=row, column=2, padx=5, pady=5)
+        ttk.Label(layer_settings_frame, text="Y:").grid(row=row, column=3, padx=5, pady=5)
+        y_entry = ttk.Entry(layer_settings_frame, width=5)
+        y_entry.grid(row=row, column=4, padx=5, pady=5)
+        ttk.Label(layer_settings_frame, text="Font Size:").grid(row=row, column=5, padx=5, pady=5)
+        font_size_entry = ttk.Entry(layer_settings_frame, width=5)
+        font_size_entry.grid(row=row, column=6, padx=5, pady=5)
+
+        layer_settings[header] = {
+            'x': x_entry,
+            'y': y_entry,
+            'font_size': font_size_entry
+        }
+        row += 1
+
+
+def start_generation():
+    template = template_path.get()
+    csv_file = csv_file_path.get()
+    output_dir = output_path.get()
+    save_psd = save_psd_var.get()
+    save_jpg = save_jpg_var.get()
+
+    if not template or not csv_file or not output_dir:
+        messagebox.showwarning("Input Error", "Please select the template, data file, and output directory.")
+        return
+
+    layer_settings_values = {
+        layer: {
+            'x': int(settings['x'].get()),
+            'y': int(settings['y'].get()),
+            'font_size': int(settings['font_size'].get())
+        }
+        for layer, settings in layer_settings.items()
+    }
+
+    generate_images(template, csv_file, output_dir, save_psd, save_jpg, layer_settings_values, progress_bar,
+                    progress_label)
+
+
+root = tk.Tk()
+root.title("Image Generation")
+
+config = load_config()
+
+template_path = tk.StringVar(value=config.get('template_path', ''))
+csv_file_path = tk.StringVar(value=config.get('csv_file_path', ''))
+output_path = tk.StringVar(value=config.get('output_path', ''))
+
+save_psd_var = tk.BooleanVar(value=config.get('save_psd', True))
+save_jpg_var = tk.BooleanVar(value=config.get('save_jpg', True))
+
+layer_settings = {}
+
+ttk.Label(root, text="Template PSD File:").grid(row=0, column=0, padx=10, pady=5, sticky=tk.W)
+ttk.Entry(root, textvariable=template_path, width=50).grid(row=0, column=1, padx=10, pady=5)
+ttk.Button(root, text="Browse", command=browse_template).grid(row=0, column=2, padx=10, pady=5)
+
+ttk.Label(root, text="CSV Data File:").grid(row=1, column=0, padx=10, pady=5, sticky=tk.W)
+ttk.Entry(root, textvariable=csv_file_path, width=50).grid(row=1, column=1, padx=10, pady=5)
+ttk.Button(root, text="Browse", command=browse_csv).grid(row=1, column=2, padx=10, pady=5)
+
+ttk.Label(root, text="Output Directory:").grid(row=2, column=0, padx=10, pady=5, sticky=tk.W)
+ttk.Entry(root, textvariable=output_path, width=50).grid(row=2, column=1, padx=10, pady=5)
+ttk.Button(root, text="Browse", command=browse_output).grid(row=2, column=2, padx=10, pady=5)
+
+ttk.Checkbutton(root, text="Save as PSD", variable=save_psd_var, command=save_config).grid(row=3, column=0, padx=10,
+                                                                                           pady=5, sticky=tk.W)
+ttk.Checkbutton(root, text="Save as JPEG", variable=save_jpg_var, command=save_config).grid(row=3, column=1, padx=10,
+                                                                                            pady=5, sticky=tk.W)
+
+ttk.Button(root, text="Generate Images", command=start_generation).grid(row=4, column=0, columnspan=3, padx=10, pady=20)
+
+ttk.Label(root, text="Layer Settings:").grid(row=5, column=0, columnspan=3, padx=10, pady=5)
+layer_settings_frame = ttk.Frame(root)
+layer_settings_frame.grid(row=6, column=0, columnspan=3, padx=10, pady=5)
+
+progress_bar = ttk.Progressbar(root, orient="horizontal", length=400, mode="determ
